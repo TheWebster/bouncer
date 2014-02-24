@@ -53,7 +53,6 @@ clean-bin:
 	@echo "==> Cleaning binaries..."
 	-rm -rf obj/
 	-rm -f bin/bouncer
-	-chmod -x bin/bouncer-global
 
 # Link
 bin/bouncer: $(OBJ) $(call mdir, bin/)
