@@ -1,0 +1,10 @@
+[Unit]
+Description=Timeout %i seconds
+Before=shutdown.service
+
+[Service]
+Type=oneshot
+ExecStart=bouncer-global --timeout=%i
+
+[Install]
+WantedBy=shutdown.service

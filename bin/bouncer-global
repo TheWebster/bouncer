@@ -1,0 +1,65 @@
+#!/bin/bash
+
+
+[ "$UID" -ne 0 ] && echo "Must be run as root." && exit 1
+
+
+BEXEC=$(dirname $0)/bouncer
+XDIR='/tmp/.X11-unix/'
+
+exec_creds() {
+	xfile=$1
+	local display=`echo $xfile | sed -ne"s/X/:/p"`
+	local user=`stat --format=%G $XDIR$xfile`
+	
+	shift
+	su -c"DISPLAY=$display ${BEXEC} $*" $user
+}
+
+
+set -- $(getopt -o hVdnat:p: -n"$0" --long help,version,debug,no-bounce,all,timeout:,pattern: -- "$@")
+
+OPTS="$@"
+
+while true; do
+	case "$1" in
+		-h|--help)
+			$BEXEC -h
+			exit 0
+			;;
+		
+		-V|--version)
+			$BEXEC -V
+			exit 0
+			;;
+		-d|--debug)
+			DEBUG=1
+			;;
+		-n|--no-bounce);;
+		-a|--all);;
+		-t|--timeout) shift ;;
+		-p|--pattern) shift;;
+		--)
+			shift
+			break
+			;;
+		*)
+			$BEXEC -h
+			exit 1
+			;;
+	esac
+	
+	shift
+done
+
+for xfile in `ls $XDIR`; do
+	exec_creds $xfile $OPTS &
+	pids=( $pids $! )
+done
+
+for pid in ${pids[@]}; do
+	wait $pid
+	[ $? -ne 0 ] && retval=1
+done
+
+exit ${retval:-0}

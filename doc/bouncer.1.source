@@ -1,0 +1,93 @@
+.TH closewins 1 "20 February 2014" "%%VERSION%%"
+
+.SH NAME
+bouncer - Gives you the chance to close your X windows gracefully before shutdown.
+
+.SH SYNOPSIS
+bouncer
+.BI "-[hVdna] [-t " seconds " ] [-p " client " ]"
+.br
+bouncer-global
+.BI "-[hVdna] [-t " seconds " ] [-p " client " ]"
+
+
+
+.SH DESCRIPTION
+bouncer will find all toplevel windows with a WM_CLASS property that is specified either on command line or in the file
+.IR ~/.bouncerc "."
+.RB "It then sends a " _NET_CLOSE_WINDOW " message to the window, followed by a request to send the window to the current desktop.
+It exits when all windows are closed or a specified timeout has elapsed.
+.br
+It is meant to be run before commands that exit X, so programs get a chance to ask for
+confirmation before exit, e.g. a text editor with unsaved chages will popup a dialog for saving
+or discarding the changes.
+.br
+bouncer-global will launch an invocation of bouncer for each running X display and will exit when all invocations exited.
+It must be run as root.
+
+
+.SH OPTIONS
+.TP
+.B -h, --help
+Display help message.
+
+.TP
+.B -V, --version
+Print version info.
+
+.TP
+.B -d, --debug
+Print debugging messages.
+
+.TP
+.B -n, --no-bounce
+Only find the windows, don't send the desktop change and close-window commands.
+
+.TP
+.B -a, --all
+.RI "Affect all windows, don't read " ~/.bouncerc " and ignore -p arguments.
+
+.TP
+.BI "-t, --timeout=" seconds
+Timout after which closewins will exit. Defaults to 60 seconds.
+
+.TP
+.BI "-p, --pattern=" client
+Specify a client manually. Can be used multiple times.
+
+
+.SH RETURN
+If bouncer exits gracefully, i.e. when the timeout expires or all windows are closed, it returns 0.
+When interrupted by SIGTERM or SIGINT it returns 1.
+
+.SH CAVEATS
+Assume a script like the following run when the power button is pressed:
+
+.PP
+.B #!/bin/bash
+
+.B bouncer
+.br
+.B shutdown -h
+
+.PP
+Once run, shutdown is inevitable, unless you know the name of the script and kill it with
+.BI "killall " scriptname .
+A better script would look like this:
+
+.PP
+.B #!/bin/bash
+
+.B bouncer && shutdown -h
+
+.PP
+Here you can abort the shutdown by calling
+.BI "killall " bouncer .
+
+
+.SH AUTHOR
+Christian Weber
+
+
+.SH VERSION
+%%VERSION%%
