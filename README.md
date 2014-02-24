@@ -57,17 +57,9 @@ to affect all Displays.
 The file *~/.bouncerc* can be used as alternative to the -p argument.
 
 
-Service file
-------------
+TODO
+----
 
-Bouncer comes with the systemd service file *bouncer@.service*.
-Run
-
-	$ systemctl enable bouncer@60
-
-to run
-
-	$ bouncer-global -t 60
-
-at each shutdown.
+I want a systemd service to run before shutdown but I can't get it to work.
+So, if anyone's more into this...
 

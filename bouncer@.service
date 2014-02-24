@@ -1,10 +1,11 @@
 [Unit]
 Description=Timeout %i seconds
-Before=shutdown.service
+Before=shutdown.target reboot.target poweroff.target sleep.target
 
 [Service]
 Type=oneshot
-ExecStart=bouncer-global --timeout=%i
+ExecStartPre=/usr/bin/touch /tmp/%i
+ExecStart=/usr/bin/true
 
 [Install]
-WantedBy=shutdown.service
+WantedBy=shutdown.target reboot.target poweroff.target sleep.target
