@@ -1,0 +1,4 @@
+/obj
+/bin/bouncer
+doc/*[0-9]
+doc/*[0-9].gz
