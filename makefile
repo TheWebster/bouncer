@@ -30,7 +30,7 @@ CFLAGS   += -O2
 endif
 
 	
-LIBS = -lxcb
+LIBS = -lxcb -lpthread
 _OBJ = bouncer.o
 OBJ  = $(addprefix obj/, $(_OBJ))
 

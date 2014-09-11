@@ -5,6 +5,7 @@
  * Author:  Christian Weber (ChristianWeber802@gmx.net) *
 \* **************************************************** */
 
+#include <dirent.h>
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
@@ -29,10 +30,14 @@ static unsigned     timeout    = 60;
 
 static char         **pattern;
 static int          npatterns;
+static pid_t        *pid_list;
+static int          npid;
 
 
 #define _malloc( pt, type, size)			(pt) = (type*)malloc( size*sizeof(type))
 #define _realloc( pt, type, size)           (pt) = (type*)realloc( (pt), size*sizeof(type))
+
+#define _verbose(...)              {if( verbose ) fprintf( stderr, __VA_ARGS__);}
 
 
 /*
@@ -212,9 +217,7 @@ read_config()
 		return -1;
 	}
 	
-	/** verbose message **/
-	if( verbose )
-		fputs( "Reading patterns\n", stderr);
+	_verbose( "Reading patterns\n");
 	
 	while( fgets( buffer, FILENAME_MAX, fconf) != NULL ) {
 		int c;
@@ -227,7 +230,7 @@ read_config()
 		else {
 			// strip \n
 			buffer[strlen(buffer)-1] = '\0';
-			if( verbose ) fprintf( stderr, "  %s\n", buffer);
+			_verbose( "  %s\n", buffer);
 			add_pattern( buffer);
 		}
 		line++;
@@ -243,6 +246,58 @@ static char
 {
 	while( *string++ != '\0' );
 	return string;
+};
+
+
+static pid_t
+spoof_pid( char *name)
+{
+	DIR           *proc = opendir( "/proc");
+	struct dirent *d;
+	pid_t         ret = 0;
+	
+	
+	while( (d = readdir( proc)) ) {
+		pid_t pid;
+		FILE  *stat;
+		char  buf[256];
+		char  *s, *q;
+		
+		
+		/* check if it is a process */
+		if( (pid = atoi( d->d_name)) == 0 ) continue;
+		
+		snprintf( buf, sizeof(buf) - 1, "/proc/%s/stat", d->d_name);
+		
+		if( (stat = fopen( buf, "r")) == NULL ) continue;
+		
+		fgets( buf, sizeof(buf) - 1, stat);
+		s = buf;
+		while( *s++ != ' ' );
+		
+		if( *s == '(' ) {
+			s++;
+			q = s;
+			while( *s != ')' ) s++;
+			*s = '\0';
+		}
+		else {
+			q = s;
+			while( *s != ' ' ) s++;
+			*s = '\0';
+		}
+		
+		fclose( stat);
+		
+		if( strcasecmp( q, name) == 0 ) {
+			ret = pid;
+			break;
+		}
+	}
+	
+	closedir( proc);
+	
+	return ret;
 };
 
 
@@ -273,8 +328,7 @@ connext( xcb_connection_t **con, xcb_screen_t **screen)
 		return -1;
 	}
 	
-	if( verbose )
-		fprintf( stderr, "Display: \"%s\"\n", displayname);
+	_verbose("Display: \"%s\"\n", displayname);
 	
 	scr_iter = xcb_setup_roots_iterator( xcb_get_setup( *con));
 	while( scr_iter.rem )
@@ -303,6 +357,39 @@ timeout_handler( int signo)
 };
 
 
+/*
+ * Polling pids
+ */
+static void *
+poll_pids( void *args)
+{
+	struct timespec interval = { 0, 500000000}; // 0.5s
+	int    pid_count = npid;
+	
+	
+	while( event_loop ) {
+		int i;
+		
+		
+		nanosleep( &interval, NULL);
+		
+		for( i = 0; i < npid; i++ ) {
+			if( pid_list[i] ) {
+				if( kill( pid_list[i], 0) == -1 ) {
+					_verbose( "PID %d closed\n", pid_list[i]);
+					pid_list[i] = 0;
+					if( --pid_count == 0 ) {
+						_verbose( "All processes closed.\n");
+						return NULL;
+					}
+				}
+			}
+		}
+	}
+	return NULL;
+};
+
+	
 int main( int argc, char *argv[])
 {
 	int      i, ipat;
@@ -311,6 +398,8 @@ int main( int argc, char *argv[])
 	fd_set   set;
 	uint32_t mask_mask       = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
 	int      nwins_todestroy = 0;
+	
+	pthread_t pid_polling_thread;
 	
 	/* x connections */
 	xcb_connection_t *con;
@@ -323,6 +412,10 @@ int main( int argc, char *argv[])
 	xcb_get_property_reply_t   *client_list_reply;
 	xcb_window_t               *client_list;
 	int                        nclients;
+	
+	/* PID list */
+	xcb_intern_atom_cookie_t   pid_atom_cookie;
+	xcb_intern_atom_reply_t    *pid_atom_reply;
 	
 	/* closing event */
 	#define MASK   XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY|XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
@@ -367,22 +460,25 @@ int main( int argc, char *argv[])
 	if( connext( &con, &screen) == -1 )
 		goto err_pat;
 	
+	
 	/** get xcb infos **/
 	// requests for atoms
 	client_atom_cookie       = xcb_intern_atom( con, 1, 16, "_NET_CLIENT_LIST");
+	pid_atom_cookie          = xcb_intern_atom( con, 1, 11,"_NET_WM_PID");
 	close_atom_cookie        = xcb_intern_atom( con, 1, 17, "_NET_CLOSE_WINDOW");
 	current_desk_atom_cookie = xcb_intern_atom( con, 1, 20, "_NET_CURRENT_DESKTOP");
 	win_desk_atom_cookie     = xcb_intern_atom( con, 1, 15, "_NET_WM_DESKTOP");
 	
 	// get atoms
-	client_atom_reply = xcb_intern_atom_reply( con, client_atom_cookie, NULL);
-	close_atom_reply  = xcb_intern_atom_reply( con, close_atom_cookie, NULL);
+	client_atom_reply       = xcb_intern_atom_reply( con, client_atom_cookie, NULL);
+	pid_atom_reply          = xcb_intern_atom_reply( con, pid_atom_cookie, NULL);
+	close_atom_reply        = xcb_intern_atom_reply( con, close_atom_cookie, NULL);
 	current_desk_atom_reply = xcb_intern_atom_reply( con, current_desk_atom_cookie, NULL);
-	win_desk_atom_reply = xcb_intern_atom_reply( con, win_desk_atom_cookie, NULL);
+	win_desk_atom_reply     = xcb_intern_atom_reply( con, win_desk_atom_cookie, NULL);
 	
 	// send request for client_list
 	current_desk_cookie = xcb_get_property( con, 0, screen->root, current_desk_atom_reply->atom, XCB_ATOM_CARDINAL, 0, 1000L);
-	client_list_cookie = xcb_get_property( con, 0, screen->root, client_atom_reply->atom, XCB_ATOM_WINDOW, 0, 1000L);
+	client_list_cookie  = xcb_get_property( con, 0, screen->root, client_atom_reply->atom, XCB_ATOM_WINDOW, 0, 1000L);
 	
 	// prepare close_event
 	close_event.response_type  = XCB_CLIENT_MESSAGE;
@@ -420,10 +516,35 @@ int main( int argc, char *argv[])
 		}
 		for( j = 0; j < npatterns; j++ ) {
 			if( strcmp( pattern[j], wm_class) == 0 || strcmp( pattern[j], shift_string( wm_class)) == 0 ) {
-				if( verbose )
-					fprintf( stderr, "0x%08x - \"%s\" \"%s\"\n", client_list[i], wm_class, shift_string(wm_class));
+				xcb_get_property_cookie_t pid_cookie = xcb_get_property( con, 0, client_list[i], pid_atom_reply->atom, XCB_ATOM_CARDINAL, 0, 1000L);
+				xcb_get_property_reply_t  *pid_reply = xcb_get_property_reply( con, pid_cookie, NULL);
+				pid_t                     pid;
+				
+				
+				_verbose( "0x%08x - \"%s\" \"%s\"\n", client_list[i], wm_class, shift_string(wm_class));
 					
 				nwins_todestroy++;
+				
+				if( pid_reply ) {
+					pid = *(pid_t*)xcb_get_property_value( pid_reply);
+					
+					_verbose( "  PID: %d\n", pid);
+				}
+				else {
+					_verbose( "  _NET_WM_PID not set...\n");
+					
+					if( (pid = spoof_pid( pattern[j])) != 0 )
+						_verbose( "  PID via /proc: %d\n", pid)
+					else
+						_verbose( "  Could not retrieve PID...\n");
+				}
+				
+				if( pid ) {
+					_realloc( pid_list, pid_t, npid + 1);
+					pid_list[npid++] = pid;
+				}
+				
+				
 				xcb_change_window_attributes( con, client_list[i], XCB_CW_EVENT_MASK, &mask_mask);
 				if( no_bounce == 0 ) {
 					change_desk_event.window = client_list[i];
@@ -436,8 +557,7 @@ int main( int argc, char *argv[])
 	}
 	
 	if( nwins_todestroy == 0 ) {
-		if( verbose )
-			fprintf( stderr, "No windows found. Exiting...\n");
+		_verbose( "No windows found. Exiting...\n");
 		goto err_all;
 	}
 	
@@ -450,6 +570,8 @@ int main( int argc, char *argv[])
 	alarm( timeout);
 	
 	/** event loop **/
+	pthread_create( &pid_polling_thread, NULL, &poll_pids, NULL);
+	
 	event_fd = xcb_get_file_descriptor( con);
 	FD_ZERO( &set);
 	FD_SET( event_fd, &set);
@@ -461,8 +583,7 @@ int main( int argc, char *argv[])
 		if( event == NULL ) {
 			if( select( event_fd + 1, &set, NULL, NULL, NULL) == -1 ) {
 				if( errno == EINTR && event_loop == 0) {
-					if( verbose )
-						fputs( "Timeout reached. Exiting...\n", stderr);
+					_verbose( "Timeout reached. Exiting...\n");
 				}
 				else {
 					perror( "select()");
@@ -474,26 +595,29 @@ int main( int argc, char *argv[])
 		}
 		else {
 			if( event->response_type == XCB_DESTROY_NOTIFY ) {
-				if( verbose )
-					fprintf( stderr, "0x%08x closed...\n", ((xcb_destroy_notify_event_t*)event)->window);
+				_verbose( "0x%08x closed...\n", ((xcb_destroy_notify_event_t*)event)->window);
 					
 				if( --nwins_todestroy == 0 ) {
-					event_loop = 0;
-					if( verbose )
-						fputs( "All windows closed. Exiting...\n", stderr);
+					_verbose( "All windows closed.\n");
+					break;
 				}
 			}
 			free( event);
 		}
 	}
 	
+	if( pthread_join( pid_polling_thread, NULL) != 0 ) _verbose( "ERROR");
+	_verbose( "Exiting...");
+	
   err_all:
 	free( client_list_reply);
+	free( pid_atom_reply);
 	free( current_desk_reply);
 	free( win_desk_atom_reply);
 	free( current_desk_atom_reply);
 	free( close_atom_reply);
 	free( client_atom_reply);
+	free( pid_list);
 	
 	xcb_disconnect( con);
 
