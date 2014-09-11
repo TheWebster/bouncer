@@ -33,6 +33,7 @@ static int          npatterns;
 static pid_t        *pid_list;
 static int          npid;
 
+#define PID_POLLING_INTERVAL   500 //milliseconds
 
 #define _malloc( pt, type, size)			(pt) = (type*)malloc( size*sizeof(type))
 #define _realloc( pt, type, size)           (pt) = (type*)realloc( (pt), size*sizeof(type))
@@ -241,6 +242,9 @@ read_config()
 };
 
 
+/*
+ * Jumps to the next in a row of \0-seperated strings and returns it.
+ */
 static char
 *shift_string( char *string)
 {
@@ -249,6 +253,13 @@ static char
 };
 
 
+/*
+ * Find the PID of a process by traversing procfs.
+ * 
+ * Parameters: name - Name of the process.
+ * 
+ * Returns: The found PID or 0 when not found.
+ */
 static pid_t
 spoof_pid( char *name)
 {
@@ -363,15 +374,13 @@ timeout_handler( int signo)
 static void *
 poll_pids( void *args)
 {
-	struct timespec interval = { 0, 500000000}; // 0.5s
+	struct timespec interval = { PID_POLLING_INTERVAL/1000, PID_POLLING_INTERVAL*1000000};
 	int    pid_count = npid;
 	
 	
 	while( event_loop ) {
 		int i;
 		
-		
-		nanosleep( &interval, NULL);
 		
 		for( i = 0; i < npid; i++ ) {
 			if( pid_list[i] ) {
@@ -385,6 +394,7 @@ poll_pids( void *args)
 				}
 			}
 		}
+		nanosleep( &interval, NULL);
 	}
 	return NULL;
 };
@@ -514,6 +524,7 @@ int main( int argc, char *argv[])
 			_realloc( pattern[0], char, strlen( wm_class));
 			cpycat( pattern[0], wm_class);
 		}
+		/** itarate through all patterns **/
 		for( j = 0; j < npatterns; j++ ) {
 			if( strcmp( pattern[j], wm_class) == 0 || strcmp( pattern[j], shift_string( wm_class)) == 0 ) {
 				xcb_get_property_cookie_t pid_cookie = xcb_get_property( con, 0, client_list[i], pid_atom_reply->atom, XCB_ATOM_CARDINAL, 0, 1000L);
@@ -525,11 +536,13 @@ int main( int argc, char *argv[])
 					
 				nwins_todestroy++;
 				
+				// obtain pid
 				if( pid_reply ) {
 					pid = *(pid_t*)xcb_get_property_value( pid_reply);
 					
 					_verbose( "  PID: %d\n", pid);
 				}
+				// fallback
 				else {
 					_verbose( "  _NET_WM_PID not set...\n");
 					
@@ -544,7 +557,7 @@ int main( int argc, char *argv[])
 					pid_list[npid++] = pid;
 				}
 				
-				
+				// send change_desk_event and close_event
 				xcb_change_window_attributes( con, client_list[i], XCB_CW_EVENT_MASK, &mask_mask);
 				if( no_bounce == 0 ) {
 					change_desk_event.window = client_list[i];
@@ -606,7 +619,7 @@ int main( int argc, char *argv[])
 		}
 	}
 	
-	if( pthread_join( pid_polling_thread, NULL) != 0 ) _verbose( "ERROR");
+	pthread_join( pid_polling_thread, NULL);
 	_verbose( "Exiting...");
 	
   err_all:

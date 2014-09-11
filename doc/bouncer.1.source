@@ -1,4 +1,4 @@
-.TH closewins 1 "20 February 2014" "%%VERSION%%"
+.TH closewins 1 "11 September 2014" "%%VERSION%%"
 
 .SH NAME
 bouncer - Gives you the chance to close your X windows gracefully before shutdown.
